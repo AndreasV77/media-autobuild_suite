@@ -103,10 +103,10 @@ if not exist %build% mkdir %build%
 
 set msyspackages=asciidoc autoconf-wrapper automake-wrapper autogen base bison diffstat dos2unix filesystem help2man ^
 intltool libtool patch python xmlto make zip unzip git subversion wget p7zip man-db ^
-gperf winpty texinfo gyp doxygen autoconf-archive itstool ruby mintty flex msys2-runtime
+gperf winpty texinfo gyp doxygen autoconf-archive itstool ruby mintty flex msys2-runtime pacutils
 
-set mingwpackages=cmake dlfcn libpng gcc nasm pcre tools-git yasm ninja pkgconf meson ccache jq ^
-clang binutils
+set mingwpackages=cmake dlfcn libpng nasm pcre tools-git yasm ninja pkgconf meson ccache jq ^
+clang gettext-tools
 
 :: built-ins
 set ffmpeg_options_builtin=--disable-autodetect amf bzlib cuda cuvid d3d11va dxva2 ^
@@ -118,7 +118,7 @@ libdav1d libaom --disable-debug libfdk-aac
 
 :: options used in zeranoe builds and not present above
 set ffmpeg_options_zeranoe=fontconfig gnutls libass libbluray libfreetype ^
-libmfx libmysofa libopencore-amrnb libopencore-amrwb libopenjpeg libsnappy ^
+libharfbuzz libmfx libmysofa libopencore-amrnb libopencore-amrwb libopenjpeg libsnappy ^
 libsoxr libspeex libtheora libtwolame libvidstab libvo-amrwbenc ^
 libwebp libxml2 libzimg libshine gpl openssl libtls avisynth mbedtls libxvid ^
 libopenmpt version3 librav1e libsrt libgsm libvmaf libsvtav1
@@ -1043,14 +1043,15 @@ if [0]==[%vlcINI%] (
     echo -------------------------------------------------------------------------------
     echo -------------------------------------------------------------------------------
     echo.
-    echo. Build vlc?
+    echo. Build VLC media player?
     echo. Takes a long time because of qt5 and wouldn't recommend it if you
     echo. don't have ccache enabled.
     echo. 1 = Yes
     echo. 2 = No
     echo.
-    echo. Note: the resulting vlc is extra buggy, do not expect it to work smoothly
-    echo.
+    echo. Note: compilation of VLC is currently broken, do not enable unless you know
+    echo. what you are doing.
+    echo. 
     echo -------------------------------------------------------------------------------
     echo -------------------------------------------------------------------------------
     set /P buildvlc="Build vlc: "
@@ -1647,7 +1648,11 @@ if not exist %instdir%\mintty.lnk (
     (
         echo.Set Shell = CreateObject("WScript.Shell"^)
         echo.Set link = Shell.CreateShortcut("%instdir%\mintty.lnk"^)
-        echo.link.Arguments = "-full-path -mingw -where .."
+        if %CC%==clang (
+            echo.link.Arguments = "-full-path -clang64 -where .."
+        ) else (
+            echo.link.Arguments = "-full-path -mingw -where .."
+        )
         echo.link.Description = "msys2 shell console"
         echo.link.TargetPath = "%instdir%\msys64\msys2_shell.cmd"
         echo.link.WindowStyle = 1
@@ -1667,7 +1672,6 @@ rem checkFstab
 set "removefstab=no"
 set "fstab=%instdir%\msys64\etc\fstab"
 if exist %fstab%. (
-    findstr build32 %fstab% >nul 2>&1 && set "removefstab=yes"
     findstr trunk %fstab% >nul 2>&1 || set "removefstab=yes"
     for /f "tokens=1 delims= " %%a in ('findstr trunk %fstab%') do if not [%%a]==[%instdir%\] set "removefstab=yes"
     findstr local32 %fstab% >nul 2>&1 && ( if [%build32%]==[no] set "removefstab=yes" ) || if [%build32%]==[yes] set "removefstab=yes"
@@ -1688,6 +1692,8 @@ if not [%removefstab%]==[no] (
         echo.%instdir%\build\ /build ntfs binary,posix=0,noacl,user 0 0
         echo.%instdir%\msys64\mingw32\ /mingw32 ntfs binary,posix=0,noacl,user 0 0
         echo.%instdir%\msys64\mingw64\ /mingw64 ntfs binary,posix=0,noacl,user 0 0
+        echo.%instdir%\msys64\clang32\ /clang32 ntfs binary,posix=0,noacl,user 0 0
+        echo.%instdir%\msys64\clang64\ /clang64 ntfs binary,posix=0,noacl,user 0 0
         if "%build32%"=="yes" echo.%instdir%\local32\ /local32 ntfs binary,posix=0,noacl,user 0 0
         if "%build64%"=="yes" echo.%instdir%\local64\ /local64 ntfs binary,posix=0,noacl,user 0 0
     )>"%instdir%\msys64\etc\fstab."
@@ -1750,6 +1756,12 @@ if not exist %instdir%\msys64\usr\bin\make.exe (
 for %%i in (%instdir%\msys64\usr\ssl\cert.pem) do if %%~zi==0 call :runBash cert.log update-ca-trust
 
 rem installmingw
+rem extra package for clang
+if %CC%==clang (
+    set "mingwpackages=%mingwpackages% gcc-compat lld"
+) else (
+    set "mingwpackages=%mingwpackages% binutils gcc"
+)
 if exist "%instdir%\msys64\etc\pac-mingw.pk" del "%instdir%\msys64\etc\pac-mingw.pk"
 for %%i in (%mingwpackages%) do echo.%%i>>%instdir%\msys64\etc\pac-mingw.pk
 if %build32%==yes call :getmingw 32
@@ -1785,8 +1797,15 @@ if %updateSuite%==y (
     )>%instdir%\update_suite.sh
 )
 
+rem ------------------------------------------------------------------
+rem write config profiles:
+rem ------------------------------------------------------------------
+
+if %build32%==yes call :writeProfile 32
+if %build64%==yes call :writeProfile 64
+
 rem update
-call :runBash update.log /build/media-suite_update.sh --build32=%build32% --build64=%build64%
+call :runBash update.log /build/media-suite_update.sh --build32=%build32% --build64=%build64% --CC="%CC%"
 
 if exist "%build%\update_core" (
     echo.-------------------------------------------------------------------------------
@@ -1795,13 +1814,6 @@ if exist "%build%\update_core" (
     pacman -S --needed --noconfirm --ask=20 --asdeps bash pacman msys2-runtime
     del "%build%\update_core"
 )
-
-rem ------------------------------------------------------------------
-rem write config profiles:
-rem ------------------------------------------------------------------
-
-if %build32%==yes call :writeProfile 32
-if %build64%==yes call :writeProfile 64
 
 mkdir "%instdir%\msys64\home\%USERNAME%\.gnupg" > nul 2>&1
 findstr hkps://keys.openpgp.org "%instdir%\msys64\home\%USERNAME%\.gnupg\gpg.conf" >nul 2>&1 || echo keyserver hkps://keys.openpgp.org >> "%instdir%\msys64\home\%USERNAME%\.gnupg\gpg.conf"
@@ -1843,7 +1855,11 @@ set compileArgs=--cpuCount=%cpuCount% --build32=%build32% --build64=%build64% ^
 --ffmpegPath=%ffmpegPath% --exitearly=%MABS_EXIT_EARLY%
     @REM --autouploadlogs=%autouploadlogs%
     set "noMintty=%noMintty%"
-    if %build64%==yes ( set "MSYSTEM=MINGW64" ) else set "MSYSTEM=MINGW32"
+    if %build64%==yes (
+        if %CC%==clang ( set "MSYSTEM=CLANG64" ) else set "MSYSTEM=MINGW64"
+    ) else (
+        if %CC%==clang ( set "MSYSTEM=CLANG32" ) else set "MSYSTEM=MINGW32"
+    )
     set "MSYS2_PATH_TYPE=inherit"
     if %noMintty%==y set "PATH=%PATH%"
     set "build=%build%"
@@ -1884,7 +1900,11 @@ goto :EOF
 :writeProfile
 (
     echo.#!/usr/bin/bash
-    echo.MSYSTEM=MINGW%1
+    if %CC%==clang (
+        echo.MSYSTEM=CLANG%1
+    ) else (
+        echo.MSYSTEM=MINGW%1
+    )
     echo.source /etc/msystem
     echo.
     echo.# package build directory
@@ -1908,15 +1928,14 @@ goto :EOF
     echo.CARCH="${MINGW_CHOST%%%%-*}"
     echo.C_INCLUDE_PATH="$(cygpath -pm $LOCALDESTDIR/include:$MINGW_PREFIX/include)"
     echo.CPLUS_INCLUDE_PATH="$(cygpath -pm $LOCALDESTDIR/include)"
-    echo.LIBRARY_PATH="$(cygpath -pm $LOCALDESTDIR/lib:$MINGW_PREFIX/lib)"
-    echo.export C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
+    echo.export C_INCLUDE_PATH CPLUS_INCLUDE_PATH
     echo.
     echo.MANPATH="${LOCALDESTDIR}/share/man:${MINGW_PREFIX}/share/man:/usr/share/man"
     echo.INFOPATH="${LOCALDESTDIR}/share/info:${MINGW_PREFIX}/share/info:/usr/share/info"
     echo.
     echo.DXSDK_DIR="${MINGW_PREFIX}/${MINGW_CHOST}"
     echo.ACLOCAL_PATH="${LOCALDESTDIR}/share/aclocal:${MINGW_PREFIX}/share/aclocal:/usr/share/aclocal"
-    echo.PKG_CONFIG="${MINGW_PREFIX}/bin/pkgconf --keep-system-libs --keep-system-cflags --static"
+    echo.PKG_CONFIG="${MINGW_PREFIX}/bin/pkgconf --keep-system-cflags --static"
     echo.PKG_CONFIG_PATH="${LOCALDESTDIR}/lib/pkgconfig:${MINGW_PREFIX}/lib/pkgconfig"
     echo.
     echo.CFLAGS="-D_FORTIFY_SOURCE=2 -fstack-protector-strong" # security related flags
@@ -1940,15 +1959,17 @@ goto :EOF
     echo.# CPPFLAGS used to be here, but cmake ignores it, so it's not as useful.
     echo.export DXSDK_DIR ACLOCAL_PATH PKG_CONFIG PKG_CONFIG_PATH CFLAGS CXXFLAGS LDFLAGS
     echo.
-    echo.export CARGO_HOME="/opt/cargo" RUSTUP_HOME="/opt/cargo"
-    echo.export CCACHE_DIR="${LOCALBUILDDIR}/cache"
+    echo.export CARGO_HOME="/opt/cargo"
+    echo.if [[ -z "$CCACHE_DIR" ]]; then
+    echo.    export CCACHE_DIR="${LOCALBUILDDIR}/cache"
+    echo.fi
     echo.
     echo.export PYTHONPATH=
     echo.
     echo.LANG=en_US.UTF-8
     echo.PATH="${MINGW_PREFIX}/bin:${INFOPATH}:${MSYS2_PATH}:${ORIGINAL_PATH}"
     echo.PATH="${LOCALDESTDIR}/bin-audio:${LOCALDESTDIR}/bin-global:${LOCALDESTDIR}/bin-video:${LOCALDESTDIR}/bin:${PATH}"
-    echo.PATH="/opt/cargo/bin:/opt/bin:${PATH}"
+    echo.PATH="/opt/bin:${PATH}"
     echo.source '/etc/profile.d/perlbin.sh'
     echo.PS1='\[\033[32m\]\u@\h \[\e[33m\]\w\[\e[0m\]\n\$ '
     echo.HOME="/home/${USERNAME}"
@@ -1998,13 +2019,22 @@ goto :EOF
 
 :getmingw
 setlocal
-if exist %instdir%\msys64\mingw%1\bin\gcc.exe GOTO :EOF
+set found=0
+set "compilers=%instdir%\msys64\mingw%1\bin\gcc.exe %instdir%\msys64\clang%1\bin\clang.exe"
+for %%i in (%compilers%) do if exist %%i set found=1
+if %found%==1 GOTO :EOF
 echo.-------------------------------------------------------------------------------
 echo.install %1 bit compiler
 echo.-------------------------------------------------------------------------------
-if "%1"=="32" (
-    set prefix=mingw-w64-i686-
-) else set prefix=mingw-w64-x86_64-
+if %CC%==clang (
+    if "%1"=="32" (
+        set prefix=mingw-w64-clang-i686-
+    ) else set prefix=mingw-w64-clang-x86_64-
+) else (
+    if "%1"=="32" (
+        set prefix=mingw-w64-i686-
+    ) else set prefix=mingw-w64-x86_64-
+)
 (
     echo.printf '\033]0;install %1 bit compiler\007'
     echo.[[ "$(uname)" = *6.1* ]] ^&^& nargs="-n 4"
@@ -2015,10 +2045,11 @@ if "%1"=="32" (
 )>%build%\mingw.sh
 call :runBash mingw%1.log /build/mingw.sh
 
-if not exist %instdir%\msys64\mingw%1\bin\gcc.exe (
+for %%i in (%compilers%) do if exist %%i set found=1
+if %found%==0 (
     echo -------------------------------------------------------------------------------
     echo.
-    echo.MinGW%1 GCC compiler isn't installed; maybe the download didn't work
+    echo.MinGW%1 compiler isn't installed; maybe the download didn't work
     echo.Do you want to try it again?
     echo.
     echo -------------------------------------------------------------------------------
